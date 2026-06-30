@@ -1,181 +1,339 @@
 require('dotenv').config();
 const {
-  Client,
-  GatewayIntentBits,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
-  PermissionsBitField,
-  EmbedBuilder
+    Client,
+    GatewayIntentBits,
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    ModalBuilder,
+    TextInputBuilder,
+    TextInputStyle,
+    PermissionsBitField,
+    EmbedBuilder
 } = require('discord.js');
 
+// ===================== CONFIGURAÇÃO =====================
+const CONFIG = {
+    CANAL_REGISTRO_NOME: '✅┃registro',
+    CANAL_APROVACAO_NOME: '🔔┃aprovação',
+    CANAL_LOGS_NOME: '📜┃logs-registro', // opcional, cria esse canal ou troque o nome
+    CARGO_MEMBRO_NOME: '👤| Membro',
+    COR_PENDENTE: '#FFD400',
+    COR_APROVADO: '#00FF88',
+    COR_REPROVADO: '#FF4040'
+};
+
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers
-  ]
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMembers
+    ]
 });
 
-client.on('ready', async () => {
-  console.log(`✅ Bot online como ${client.user.tag}`);
+// Cache em memória das solicitações pendentes (userId -> dados do formulário)
+// Evita guardar tudo dentro do customId do botão (que tem limite de 100 caracteres)
+const registrosPendentes = new Map();
 
-  const canal = client.channels.cache.find(c => c.name === '✅┃registro');
+// ===================== FUNÇÕES AUXILIARES =====================
 
-  if (!canal) return console.log('Canal registro não encontrado');
+function buscarCanalPorNome(guild, nome) {
+    return guild.channels.cache.find(c => c.name === nome) ?? null;
+}
 
-  const botao = new ButtonBuilder()
-    .setCustomId('registrar')
-    .setLabel('📋 Registrar')
-    .setStyle(ButtonStyle.Primary);
+function criarEmbedRegistro({ usuario, nome, id, recrutador, status = 'pendente', responsavel = null, motivo = null }) {
+    const cores = {
+        pendente: CONFIG.COR_PENDENTE,
+        aprovado: CONFIG.COR_APROVADO,
+        reprovado: CONFIG.COR_REPROVADO
+    };
 
-  const row = new ActionRowBuilder().addComponents(botao);
-
-  await canal.send({
-    content: 'Clique no botão abaixo para se registrar 👇',
-    components: [row]
-  });
-});
-
-client.on('interactionCreate', async (interaction) => {
-
-  // BOTÃO REGISTRAR
-  if (interaction.isButton() && interaction.customId === 'registrar') {
-
-    const modal = new ModalBuilder()
-      .setCustomId('formRegistro')
-      .setTitle('Registro');
-
-    const nome = new TextInputBuilder()
-      .setCustomId('nome')
-      .setLabel('Seu nome')
-      .setStyle(TextInputStyle.Short);
-
-    const id = new TextInputBuilder()
-      .setCustomId('id')
-      .setLabel('Seu ID')
-      .setStyle(TextInputStyle.Short);
-
-    const recrutador = new TextInputBuilder()
-      .setCustomId('recrutador')
-      .setLabel('Recrutador')
-      .setStyle(TextInputStyle.Short);
-
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(nome),
-      new ActionRowBuilder().addComponents(id),
-      new ActionRowBuilder().addComponents(recrutador)
-    );
-
-    return interaction.showModal(modal);
-  }
-
-  // ENVIO DO FORMULÁRIO
-  if (interaction.isModalSubmit()) {
-
-    const nome = interaction.fields.getTextInputValue('nome');
-    const id = interaction.fields.getTextInputValue('id');
-    const recrutador = interaction.fields.getTextInputValue('recrutador');
-
-    const canalAprovacao = interaction.guild.channels.cache.find(c => c.name === '🔔┃aprovação');
-
-    if (!canalAprovacao) {
-      return interaction.reply({ content: '❌ Canal de aprovação não encontrado', ephemeral: true });
-    }
-
-    // Encode seguro (resolve problema de espaço)
-    const encodedNome = encodeURIComponent(nome);
-
-    const aprovarBtn = new ButtonBuilder()
-      .setCustomId(`aprovar_${interaction.user.id}_${id}_${encodedNome}`)
-      .setLabel('✅ Aprovar')
-      .setStyle(ButtonStyle.Success);
-
-    const reprovarBtn = new ButtonBuilder()
-      .setCustomId(`reprovar_${interaction.user.id}`)
-      .setLabel('❌ Reprovar')
-      .setStyle(ButtonStyle.Danger);
-
-    const row = new ActionRowBuilder().addComponents(aprovarBtn, reprovarBtn);
+    const titulos = {
+        pendente: '📋 Nova Solicitação de Registro',
+        aprovado: '✅ Registro Aprovado',
+        reprovado: '❌ Registro Reprovado'
+    };
 
     const embed = new EmbedBuilder()
-      .setColor('#00ff88')
-      .setTitle('📋 Nova Solicitação de Registro')
-      .setDescription(`Usuário: <@${interaction.user.id}>`)
-      .addFields(
-        { name: '🆔 ID', value: id, inline: true },
-        { name: '👤 Nome', value: nome, inline: true },
-        { name: '🎯 Recrutador', value: recrutador, inline: true }
-      )
-      .setThumbnail(interaction.user.displayAvatarURL())
-      .setFooter({ text: 'Sistema de Registro' })
-      .setTimestamp();
+        .setColor(cores[status])
+        .setTitle(titulos[status])
+        .setDescription(`Usuário: <@${usuario.id}>`)
+        .addFields(
+            { name: '🆔 ID informado', value: id, inline: true },
+            { name: '👤 Nome', value: nome, inline: true },
+            { name: '🎯 Recrutador', value: recrutador, inline: true },
+            { name: '🗓️ Conta criada em', value: `<t:${Math.floor(usuario.createdTimestamp / 1000)}:D>`, inline: true },
+            { name: '📅 Solicitado em', value: `<t:${Math.floor(Date.now() / 1000)}:R>`, inline: true }
+        )
+        .setThumbnail(usuario.displayAvatarURL())
+        .setFooter({ text: 'Sistema de Registro' })
+        .setTimestamp();
 
-    await canalAprovacao.send({
-      embeds: [embed],
-      components: [row]
-    });
-
-    return interaction.reply({
-      content: '⏳ Seu registro foi enviado para aprovação.',
-      ephemeral: true
-    });
-  }
-
-  // APROVAÇÃO / REPROVAÇÃO
-  if (interaction.isButton()) {
-
-    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-      return interaction.reply({ content: '❌ Sem permissão.', ephemeral: true });
+    if (motivo) {
+        embed.addFields({ name: '📝 Motivo da reprovação', value: motivo });
     }
 
-    const parts = interaction.customId.split('_');
-    const acao = parts[0];
-    const userId = parts[1];
-
-    const membro = await interaction.guild.members.fetch(userId);
-    const cargo = interaction.guild.roles.cache.find(r => r.name === '👤| Membro');
-
-    if (acao === 'aprovar') {
-
-      const id = parts[2];
-      const nome = decodeURIComponent(parts[3]);
-
-      // Dá cargo
-      if (cargo) {
-        await membro.roles.add(cargo);
-      }
-
-      // 🔥 ALTERA NICKNAME
-      try {
-        await membro.setNickname(`${id} | ${nome}`);
-      } catch (err) {
-        console.log('Erro ao alterar nickname:', err);
-      }
-
-      const embed = EmbedBuilder.from(interaction.message.embeds[0])
-        .setColor('#00ff00')
-        .setFooter({ text: `Aprovado por ${interaction.user.tag}` });
-
-      await interaction.update({
-        embeds: [embed],
-        components: []
-      });
-
-    } else if (acao === 'reprovar') {
-
-      const embed = EmbedBuilder.from(interaction.message.embeds[0])
-        .setColor('#ff0000')
-        .setFooter({ text: `Reprovado por ${interaction.user.tag}` });
-
-      await interaction.update({
-        embeds: [embed],
-        components: []
-      });
+    if (responsavel) {
+        embed.setFooter({ text: `${titulos[status]} por ${responsavel.tag}` });
     }
-  }
+
+    return embed;
+}
+
+async function enviarLog(guild, mensagem) {
+    const canalLogs = buscarCanalPorNome(guild, CONFIG.CANAL_LOGS_NOME);
+    if (canalLogs) {
+        canalLogs.send(mensagem).catch(() => null);
+    }
+}
+
+async function avisarPorDM(usuario, mensagem) {
+    try {
+        await usuario.send(mensagem);
+    } catch {
+        // Usuário com DM fechada — apenas ignora, não quebra o fluxo
+    }
+}
+
+// ===================== BOT PRONTO =====================
+
+client.once('ready', async () => {
+    console.log(`✅ Bot online como ${client.user.tag}`);
+
+    for (const guild of client.guilds.cache.values()) {
+        const canalRegistro = buscarCanalPorNome(guild, CONFIG.CANAL_REGISTRO_NOME);
+        if (!canalRegistro) {
+            console.log(`⚠️ Canal "${CONFIG.CANAL_REGISTRO_NOME}" não encontrado em ${guild.name}`);
+            continue;
+        }
+
+        const botao = new ButtonBuilder()
+            .setCustomId('registrar')
+            .setLabel('📋 Registrar')
+            .setStyle(ButtonStyle.Primary);
+
+        const row = new ActionRowBuilder().addComponents(botao);
+
+        const embed = new EmbedBuilder()
+            .setColor('#2B2D31')
+            .setTitle('📋 Registro de Membros')
+            .setDescription('Clique no botão abaixo para preencher seu formulário de registro.\n\nSua solicitação será analisada pela equipe antes da liberação.');
+
+        await canalRegistro.send({ embeds: [embed], components: [row] }).catch(console.error);
+    }
+});
+
+// ===================== INTERAÇÕES =====================
+
+client.on('interactionCreate', async (interaction) => {
+    try {
+        // ---------- BOTÃO: ABRIR FORMULÁRIO ----------
+        if (interaction.isButton() && interaction.customId === 'registrar') {
+            const membro = interaction.member;
+            const cargoMembro = interaction.guild.roles.cache.find(r => r.name === CONFIG.CARGO_MEMBRO_NOME);
+
+            if (cargoMembro && membro.roles.cache.has(cargoMembro.id)) {
+                return interaction.reply({ content: '✅ Você já está registrado!', ephemeral: true });
+            }
+
+            if (registrosPendentes.has(interaction.user.id)) {
+                return interaction.reply({
+                    content: '⏳ Você já tem uma solicitação pendente. Aguarde a análise da equipe.',
+                    ephemeral: true
+                });
+            }
+
+            const modal = new ModalBuilder()
+                .setCustomId('formRegistro')
+                .setTitle('Formulário de Registro');
+
+            const nome = new TextInputBuilder()
+                .setCustomId('nome')
+                .setLabel('Seu nome')
+                .setStyle(TextInputStyle.Short)
+                .setMinLength(2)
+                .setMaxLength(32)
+                .setRequired(true);
+
+            const id = new TextInputBuilder()
+                .setCustomId('id')
+                .setLabel('Seu ID')
+                .setStyle(TextInputStyle.Short)
+                .setMaxLength(16)
+                .setRequired(true);
+
+            const recrutador = new TextInputBuilder()
+                .setCustomId('recrutador')
+                .setLabel('Recrutador')
+                .setStyle(TextInputStyle.Short)
+                .setMaxLength(32)
+                .setRequired(true);
+
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(nome),
+                new ActionRowBuilder().addComponents(id),
+                new ActionRowBuilder().addComponents(recrutador)
+            );
+
+            return interaction.showModal(modal);
+        }
+
+        // ---------- MODAL: ENVIO DO FORMULÁRIO DE REGISTRO ----------
+        if (interaction.isModalSubmit() && interaction.customId === 'formRegistro') {
+            const nome = interaction.fields.getTextInputValue('nome').trim();
+            const id = interaction.fields.getTextInputValue('id').trim();
+            const recrutador = interaction.fields.getTextInputValue('recrutador').trim();
+
+            const canalAprovacao = buscarCanalPorNome(interaction.guild, CONFIG.CANAL_APROVACAO_NOME);
+            if (!canalAprovacao) {
+                return interaction.reply({ content: '❌ Canal de aprovação não encontrado. Avise um administrador.', ephemeral: true });
+            }
+
+            registrosPendentes.set(interaction.user.id, { nome, id, recrutador, criadoEm: Date.now() });
+
+            const aprovarBtn = new ButtonBuilder()
+                .setCustomId(`aprovar_${interaction.user.id}`)
+                .setLabel('✅ Aprovar')
+                .setStyle(ButtonStyle.Success);
+
+            const reprovarBtn = new ButtonBuilder()
+                .setCustomId(`reprovar_${interaction.user.id}`)
+                .setLabel('❌ Reprovar')
+                .setStyle(ButtonStyle.Danger);
+
+            const row = new ActionRowBuilder().addComponents(aprovarBtn, reprovarBtn);
+
+            const embed = criarEmbedRegistro({
+                usuario: interaction.user,
+                nome,
+                id,
+                recrutador,
+                status: 'pendente'
+            });
+
+            await canalAprovacao.send({ embeds: [embed], components: [row] });
+
+            await enviarLog(interaction.guild, `📋 <@${interaction.user.id}> enviou uma solicitação de registro (ID: ${id}).`);
+
+            return interaction.reply({
+                content: '⏳ Seu registro foi enviado para aprovação. Você será avisado por DM assim que for analisado.',
+                ephemeral: true
+            });
+        }
+
+        // ---------- BOTÃO: APROVAR / REPROVAR ----------
+        if (interaction.isButton() && (interaction.customId.startsWith('aprovar_') || interaction.customId.startsWith('reprovar_'))) {
+
+            if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+                return interaction.reply({ content: '❌ Você não tem permissão para fazer isso.', ephemeral: true });
+            }
+
+            const [acao, userId] = interaction.customId.split('_');
+            const registro = registrosPendentes.get(userId);
+
+            if (!registro) {
+                return interaction.reply({
+                    content: '⚠️ Essa solicitação não está mais disponível (talvez já tenha sido analisada).',
+                    ephemeral: true
+                });
+            }
+
+            // ---- REPROVAR: pede motivo antes de finalizar ----
+            if (acao === 'reprovar') {
+                const modal = new ModalBuilder()
+                    .setCustomId(`modalReprovar_${userId}`)
+                    .setTitle('Motivo da reprovação');
+
+                const motivoInput = new TextInputBuilder()
+                    .setCustomId('motivo')
+                    .setLabel('Explique o motivo (opcional)')
+                    .setStyle(TextInputStyle.Paragraph)
+                    .setRequired(false)
+                    .setMaxLength(300);
+
+                modal.addComponents(new ActionRowBuilder().addComponents(motivoInput));
+
+                return interaction.showModal(modal);
+            }
+
+            // ---- APROVAR ----
+            const membro = await interaction.guild.members.fetch(userId).catch(() => null);
+            if (!membro) {
+                registrosPendentes.delete(userId);
+                return interaction.reply({ content: '❌ Esse usuário não está mais no servidor.', ephemeral: true });
+            }
+
+            const cargo = interaction.guild.roles.cache.find(r => r.name === CONFIG.CARGO_MEMBRO_NOME);
+
+            if (cargo) {
+                await membro.roles.add(cargo).catch(err => console.log('Erro ao adicionar cargo:', err));
+            } else {
+                console.log(`⚠️ Cargo "${CONFIG.CARGO_MEMBRO_NOME}" não encontrado.`);
+            }
+
+            try {
+                await membro.setNickname(`${registro.id} | ${registro.nome}`);
+            } catch (err) {
+                console.log('Erro ao alterar nickname (provavelmente cargo acima do bot):', err.message);
+            }
+
+            const embedAtualizado = criarEmbedRegistro({
+                usuario: membro.user,
+                nome: registro.nome,
+                id: registro.id,
+                recrutador: registro.recrutador,
+                status: 'aprovado',
+                responsavel: interaction.user
+            });
+
+            await interaction.update({ embeds: [embedAtualizado], components: [] });
+
+            await avisarPorDM(membro.user, `✅ Seu registro em **${interaction.guild.name}** foi aprovado! Bem-vindo(a).`);
+            await enviarLog(interaction.guild, `✅ Registro de <@${userId}> aprovado por <@${interaction.user.id}>.`);
+
+            registrosPendentes.delete(userId);
+            return;
+        }
+
+        // ---------- MODAL: MOTIVO DA REPROVAÇÃO ----------
+        if (interaction.isModalSubmit() && interaction.customId.startsWith('modalReprovar_')) {
+            const userId = interaction.customId.split('_')[1];
+            const registro = registrosPendentes.get(userId);
+
+            if (!registro) {
+                return interaction.reply({ content: '⚠️ Essa solicitação não está mais disponível.', ephemeral: true });
+            }
+
+            const motivo = interaction.fields.getTextInputValue('motivo').trim() || 'Não informado';
+
+            const usuario = await client.users.fetch(userId).catch(() => null);
+
+            const embedAtualizado = criarEmbedRegistro({
+                usuario: usuario ?? { id: userId, createdTimestamp: Date.now(), displayAvatarURL: () => null },
+                nome: registro.nome,
+                id: registro.id,
+                recrutador: registro.recrutador,
+                status: 'reprovado',
+                responsavel: interaction.user,
+                motivo
+            });
+
+            await interaction.update({ embeds: [embedAtualizado], components: [] });
+
+            if (usuario) {
+                await avisarPorDM(usuario, `❌ Seu registro em **${interaction.guild.name}** foi reprovado.\n📝 Motivo: ${motivo}`);
+            }
+            await enviarLog(interaction.guild, `❌ Registro de <@${userId}> reprovado por <@${interaction.user.id}>. Motivo: ${motivo}`);
+
+            registrosPendentes.delete(userId);
+            return;
+        }
+
+    } catch (err) {
+        console.error('Erro no interactionCreate:', err);
+        if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
+            interaction.reply({ content: '❌ Ocorreu um erro inesperado. Tente novamente.', ephemeral: true }).catch(() => null);
+        }
+    }
 });
 
 client.login(process.env.TOKEN);
