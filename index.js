@@ -106,14 +106,30 @@ async function enviarPainelRegistro(canal) {
     const botao = new ButtonBuilder()
         .setCustomId('registrar')
         .setLabel('📋 Registrar')
-        .setStyle(ButtonStyle.Primary);
+        .setStyle(ButtonStyle.Success);
 
     const row = new ActionRowBuilder().addComponents(botao);
 
     const embed = new EmbedBuilder()
         .setColor('#2B2D31')
-        .setTitle('📋 Registro de Membros')
-        .setDescription('Clique no botão abaixo para preencher seu formulário de registro.\n\nSua solicitação será analisada pela equipe antes da liberação.');
+        .setTitle('📋 SISTEMA DE REGISTRO')
+        .setDescription(`
+Seja muito bem-vindo(a)! 👋
+
+Para liberar seu acesso total e interagir na facção **Marrokan**, você precisa realizar o seu registro.
+
+━━━━━━━━━━━━━━━━━━━━━━━
+**📝 Como realizar o registro?**
+
+**1.** Clique no botão verde abaixo
+**2.** Preencha o formulário com o seu **nome** e **ID** no jogo
+**3.** Aguarde a aprovação de um recrutador
+━━━━━━━━━━━━━━━━━━━━━━━
+
+⚠️ Certifique-se de preencher as informações corretamente para evitar reprovação.
+`)
+        .setFooter({ text: '🛡️ Sistema de Whitelist e Recrutamento' })
+        .setTimestamp();
 
     return canal.send({ embeds: [embed], components: [row] });
 }
