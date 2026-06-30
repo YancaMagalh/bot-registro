@@ -9,7 +9,12 @@ const {
     TextInputBuilder,
     TextInputStyle,
     PermissionsBitField,
-    EmbedBuilder
+    PermissionFlagsBits,
+    EmbedBuilder,
+    SlashCommandBuilder,
+    REST,
+    Routes,
+    ChannelType
 } = require('discord.js');
 
 // ===================== CONFIGURAÇÃO =====================
@@ -29,6 +34,9 @@ const client = new Client({
         GatewayIntentBits.GuildMembers
     ]
 });
+
+const CLIENT_ID = process.env.CLIENT_ID;
+const GUILD_ID = process.env.GUILD_ID;
 
 // Cache em memória das solicitações pendentes (userId -> dados do formulário)
 // Evita guardar tudo dentro do customId do botão (que tem limite de 100 caracteres)
@@ -94,10 +102,63 @@ async function avisarPorDM(usuario, mensagem) {
     }
 }
 
+async function enviarPainelRegistro(canal) {
+    const botao = new ButtonBuilder()
+        .setCustomId('registrar')
+        .setLabel('📋 Registrar')
+        .setStyle(ButtonStyle.Primary);
+
+    const row = new ActionRowBuilder().addComponents(botao);
+
+    const embed = new EmbedBuilder()
+        .setColor('#2B2D31')
+        .setTitle('📋 Registro de Membros')
+        .setDescription('Clique no botão abaixo para preencher seu formulário de registro.\n\nSua solicitação será analisada pela equipe antes da liberação.');
+
+    return canal.send({ embeds: [embed], components: [row] });
+}
+
+// ===================== SLASH COMMANDS =====================
+
+const commands = [
+    new SlashCommandBuilder()
+        .setName('painelregistro')
+        .setDescription('Envia o painel de registro neste canal (ou em outro, se especificado)')
+        .addChannelOption(option =>
+            option
+                .setName('canal')
+                .setDescription('Canal onde o painel será enviado (padrão: este canal)')
+                .addChannelTypes(ChannelType.GuildText)
+                .setRequired(false)
+        )
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+].map(c => c.toJSON());
+
+async function registrarSlashCommands() {
+    if (!CLIENT_ID || !GUILD_ID) {
+        console.log('⚠️ CLIENT_ID ou GUILD_ID não definidos no .env — slash commands não registrados.');
+        return;
+    }
+
+    const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
+
+    try {
+        await rest.put(
+            Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+            { body: commands }
+        );
+        console.log('✅ Slash Commands registrados');
+    } catch (err) {
+        console.error('Erro ao registrar slash commands:', err);
+    }
+}
+
 // ===================== BOT PRONTO =====================
 
 client.once('ready', async () => {
     console.log(`✅ Bot online como ${client.user.tag}`);
+
+    await registrarSlashCommands();
 
     for (const guild of client.guilds.cache.values()) {
         const canalRegistro = buscarCanalPorNome(guild, CONFIG.CANAL_REGISTRO_NOME);
@@ -106,19 +167,7 @@ client.once('ready', async () => {
             continue;
         }
 
-        const botao = new ButtonBuilder()
-            .setCustomId('registrar')
-            .setLabel('📋 Registrar')
-            .setStyle(ButtonStyle.Primary);
-
-        const row = new ActionRowBuilder().addComponents(botao);
-
-        const embed = new EmbedBuilder()
-            .setColor('#2B2D31')
-            .setTitle('📋 Registro de Membros')
-            .setDescription('Clique no botão abaixo para preencher seu formulário de registro.\n\nSua solicitação será analisada pela equipe antes da liberação.');
-
-        await canalRegistro.send({ embeds: [embed], components: [row] }).catch(console.error);
+        await enviarPainelRegistro(canalRegistro).catch(console.error);
     }
 });
 
@@ -126,6 +175,18 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async (interaction) => {
     try {
+        // ---------- COMANDO: /painelregistro ----------
+        if (interaction.isChatInputCommand() && interaction.commandName === 'painelregistro') {
+            const canal = interaction.options.getChannel('canal') ?? interaction.channel;
+
+            await enviarPainelRegistro(canal);
+
+            return interaction.reply({
+                content: `✅ Painel de registro enviado em ${canal}.`,
+                ephemeral: true
+            });
+        }
+
         // ---------- BOTÃO: ABRIR FORMULÁRIO ----------
         if (interaction.isButton() && interaction.customId === 'registrar') {
             const membro = interaction.member;
